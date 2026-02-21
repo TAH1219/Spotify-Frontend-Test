@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import Results from "../components/Results"
 
-//import { searchTracks } from "../api/soundcloud";
+
+//import { searchTracks } from "../api/spotify";
 import Search from "../components/Search";
 import TrackCard from "../components/TrackCard";
 
@@ -12,7 +14,7 @@ export default function Home() {
 
 
     useEffect(() => {
-        fetch("http://localhost:3001/api/me")
+        fetch("/api/me", { credentials: "include" })
             .then(res => {
                 if (res.ok) {
                     setIsLoggedIn(true);
@@ -25,7 +27,7 @@ export default function Home() {
 
         try {
             const res = await fetch(
-                `http://localhost:3001/api/search?q=${encodeURIComponent(query)}`
+                `/api/search?q=${encodeURIComponent(query)}`,{ credentials: "include" }
             );
 
             const data = await res.json();
@@ -42,11 +44,11 @@ export default function Home() {
 
             {!isLoggedIn ? (
                 <div style={{ textAlign: "center", marginTop: "50px" }}>
-                    <h2>Login to SoundCloud</h2>
+                    <h2>Login to Spotify</h2>
 
-                    <a href="http://localhost:3001/auth/login">
+                    <a href="/auth/login">
                         <button>
-                            Login with SoundCloud
+                            Login with Spotify
                         </button>
                     </a>
                 </div>

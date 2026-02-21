@@ -1,27 +1,23 @@
-const CLIENT_ID = import.meta.env.VITE_SC_CLIENT_ID;
-
-export default function TrackCard({ track}) {
+export default function TrackCard({ track }) {
     if (!track) return null;
-    const streamUrl = track.stream_url
-        ? `$(track.stream_url)?client_id=${CLIENT_ID}`
-        : null;
+
+    const artwork = track.album?.images?.[0]?.url;
+    const artist = track.artists?.[0]?.name;
 
     return (
         <div className="track-card">
-            <img
-                src={track.artwork_url || track.user.avatar_url}
-                alt={track.title}
-                width="200"
-        />
+            {artwork && (
+                <img src={artwork} alt={track.name} width="200" />
+            )}
 
-        <h3>{track.title}</h3>
-        <p>{track.user.username}</p>
+            <h3>{track.name}</h3>
+            <p>{artist}</p>
 
-        {streamUrl ? (
-            <audio controls src={streamURL} />
-        ) : (
-            <p>No stream available</p>
-        )}
+            {track.preview_url ? (
+                <audio controls src={track.preview_url} />
+            ) : (
+                <p>No preview available</p>
+            )}
         </div>
     );
 }
