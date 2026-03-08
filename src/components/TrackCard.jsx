@@ -1,20 +1,23 @@
 export default function TrackCard({ track }) {
-    if (!track) return null;
 
-    const artwork = track.album?.images?.[0]?.url;
-    const artist = track.artists?.[0]?.name;
+    //if (!t) return null;
+    const traq = track?.item ?? track; // normalize
+    //if (!t) return null;
+
+    const artwork = traq.album?.images?.[2]?.url;
+    const artist = traq.artists?.[0]?.name;
 
     return (
         <div className="track-card">
             {artwork && (
-                <img src={artwork} alt={track.name} width="200" />
+                <img src={artwork} alt={traq.name} width="200" />
             )}
 
-            <h3>{track.name}</h3>
+            <h3>{traq.name}</h3>
             <p>{artist}</p>
 
-            {track.preview_url ? (
-                <audio controls src={track.preview_url} />
+            {traq.preview_url ? (
+                <audio controls src={traq.preview_url} />
             ) : (
                 <p>No preview available</p>
             )}
