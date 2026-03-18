@@ -1,17 +1,12 @@
 import express from "express";
-//import axios from "axios";
 import cors from "cors";
 import dotenv from "dotenv";
 import { generateCodeVerifier, OAuth2Client } from "@badgateway/oauth2-client";
-//import fs from "fs";
 import session from "express-session";
 import FileStore from 'session-file-store'
 let codeVerifierGlobal = null; //need to store this in session storage
 
-//const raw = fs.readFileSync(".env");
-//console.log("Raw bytes:", raw);
-//console.log("As string:", raw.toString());
-//console.log("CWD:", process.cwd());
+
 
 dotenv.config({ path: "./.env" });
 console.log("CLIENT ID:", process.env.SC_CLIENT_ID);
@@ -61,6 +56,7 @@ app.get("/auth/login", async (req, res) => {
       "playlist-read-collaborative",
       "playlist-modify-public",
       "playlist-modify-private",
+      "user-library-read",
     ]
   });
   codeVerifierGlobal = codeVerifier;
@@ -168,16 +164,18 @@ app.get("/api/playlists/:id/tracks", async (req, res) => {
 
   try {
     let tracks = [];
-    let url = `https://api.spotify.com/v1/playlists/${req.params.id}/items?limit=100`;
+    let url = `https://api.spotify.com/v1/playlists/${req.params.id}/items?limit=100&fields=next,items(item(id,name,uri,duration_ms,explicit,preview_url,artists,album))`;
 
     while (url) {
       const response = await fetch(url, {
         headers: { "Authorization": `Bearer ${token}` }
       });
       const data = await response.json();
-      //console.log("TRACKS RESPONSE:", JSON.stringify(data).slice(0, 300));
-      tracks.push(...(data.items.filter(Boolean)));
-      //tracks = tracks.concat(data.items.map(item => item.track).filter(Boolean));
+      console.log("STATUS:", response.status, "HAS ITEMS:", !!data.items);
+      //tracks.push(...(data.items.map(item => item.item).filter(Boolean)))
+      const items = data.items.map(item => item.item).filter(Boolean);
+      console.log("FIRST ITEM:", JSON.stringify(items[0])?.slice(0, 100));
+      tracks = tracks.concat(items);
       url = data.next; // null when we've hit the last page
     }
 
@@ -213,26 +211,44 @@ app.post("/api/playlists", async (req, res) => {
   }
 });
 
-// replace the track order in a playlist (this is how we push a sorted order back to spotify)
-app.put("/api/playlists/:id/tracks", async (req, res) => {
+//replace the track order in a playlist (this is how we push a sorted order back to spotify)
+app.put("/api/playlists/:id/items", async (req, res) => {
   const token = req.session.accessToken;
   if (!token) return res.status(401).json({ error: "Not logged in" });
 
   const { uris } = req.body;
 
   try {
-    const response = await fetch(
-      `https://api.spotify.com/v1/playlists/${req.params.id}/tracks`,
-      {
-        method: "PUT",
-        headers: {
-          "Authorization": `Bearer ${token}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ uris })
+    //Spotify caps both PUT and POST at 100 URIs per request
+    const chunks = [];
+    for (let i = 0; i < uris.length; i += 100) {
+      chunks.push(uris.slice(i, i + 100));
+    }
+
+    //PUT replaces the entire playlist — send the first 100
+    const putRes = await fetch(`https://api.spotify.com/v1/playlists/${req.params.id}/items`, {
+      method: "PUT",
+      headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ uris: chunks[0] })
+    });
+    if (!putRes.ok) {
+      const err = await putRes.json();
+      return res.status(putRes.status).json({ error: err?.error?.message ?? "Spotify PUT failed" });
+    }
+
+    //POST appends the rest, 100 at a time, at the correct position
+    for (let i = 1; i < chunks.length; i++) {
+      const postRes = await fetch(`https://api.spotify.com/v1/playlists/${req.params.id}/items`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ uris: chunks[i], position: i * 100 })
+      });
+      if (!postRes.ok) {
+        const err = await postRes.json();
+        return res.status(postRes.status).json({ error: err?.error?.message ?? `Spotify POST chunk ${i} failed` });
       }
-    );
-    const data = await response.json();
+    }
+
     res.json({ success: true });
   } catch (err) {
     console.error("Reorder playlist error:", err.message);
@@ -240,6 +256,33 @@ app.put("/api/playlists/:id/tracks", async (req, res) => {
   }
 });
 
+
+// add one or more tracks to a playlist
+app.post("/api/playlists/:id/items", async (req, res) => {
+    const token = req.session.accessToken;
+    if (!token) return res.status(401).json({ error: "Not logged in" });
+
+    const { uris } = req.body;
+
+    try {
+        const response = await fetch(`https://api.spotify.com/v1/playlists/${req.params.id}/items`, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${token}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ uris })
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            return res.status(response.status).json({ error: data?.error?.message ?? "Spotify rejected the request" });
+        }
+        res.json({ success: true });
+    } catch (err) {
+        console.error("Add tracks error:", err.message);
+        res.status(500).json({ error: "Failed to add tracks" });
+    }
+});
 
 
 // ================= START =================

@@ -12,7 +12,10 @@ export default function PlaylistPanel({ onSelect }) {
     useEffect(() => {
         fetch("/api/playlists", { credentials: "include" })
             .then(res => res.json())
-            .then(data => setPlaylists(data))
+            .then(data => {
+            console.log("SAMPLE PLAYLIST:", JSON.stringify(data[0], null, 2));
+            setPlaylists(data);
+        })
             .finally(() => setLoading(false));
     }, []);
 
@@ -55,7 +58,7 @@ export default function PlaylistPanel({ onSelect }) {
             </div>
 
             {/* playlist list */}
-            <ul className="playlist-list">
+            <ul className="playlist-list">5
                 {playlists.map(playlist => (
                     <li
                         key={playlist.id}
@@ -68,7 +71,7 @@ export default function PlaylistPanel({ onSelect }) {
                         )}
                         <span>{playlist.name}</span>
                         <span style={{ color: "gray", fontSize: "0.8em" }}>
-                            {playlist.tracks?.total ?? 0} tracks
+                            {playlist.items?.total != null ? ` ${playlist.items.total} tracks` : ""}
                         </span>
                     </li>
                 ))}
