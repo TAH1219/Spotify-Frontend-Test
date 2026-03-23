@@ -162,7 +162,7 @@ export default function PlaylistView({ playlist, onBack }) {
             {/* back button to return to playlist list */}
             <div className="playlist-view-header">
                 <button onClick={onBack}>← Back to Playlists</button>
-                <button onClick={toggleEditMode}>
+                <button onClick={editMode ? async () => { await handleSaveOrder(); setEditMode(false); } : toggleEditMode}>
                     {editMode ? "Done Editing" : "Edit Playlist"}
                 </button>
             </div>
