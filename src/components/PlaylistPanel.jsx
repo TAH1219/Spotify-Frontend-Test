@@ -1,3 +1,5 @@
+import "./PlaylistView.css";
+
 import { useEffect, useState } from "react";
 
 // displays the user's list of playlists in a sidebar panel
@@ -67,7 +69,7 @@ export default function PlaylistPanel({ onSelect }) {
                     >
                         {/* show playlist cover if it exists */}
                         {playlist.images?.[0]?.url && (
-                            <img src={playlist.images[0].url} alt={playlist.name} width="40" />
+                            <img src={playlist.images[0].url} alt={playlist.name}  />
                         )}
                         <span>{playlist.name}</span>
                         <span style={{ color: "gray", fontSize: "0.8em" }}>
