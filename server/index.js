@@ -3,25 +3,40 @@ import cors from "cors";
 import dotenv from "dotenv";
 import { generateCodeVerifier, OAuth2Client } from "@badgateway/oauth2-client";
 import session from "express-session";
-import FileStore from 'session-file-store'
-let codeVerifierGlobal = null; //need to store this in session storage
-
-
+import FileStore from "session-file-store";
 
 dotenv.config({ path: "./.env" });
 console.log("CLIENT ID:", process.env.SC_CLIENT_ID);
 
 const app = express();
-let accessToken = null;
-app.use(cors({
-  origin: "http://127.0.0.1:5173",
-  credentials: true
-}));
-app.use(express.json());
 const FileStoreSession = FileStore(session);
 const PORT = 3001;
 
-// ================= LOGIN =================
+app.use(
+  cors({
+    origin: "http://127.0.0.1:5173",
+    credentials: true,
+  })
+);
+
+app.use(express.json());
+
+app.use(
+  session({
+    store: new FileStoreSession({
+      path: "./sessions",
+      ttl: 86400,
+    }),
+    secret: "meoasudhfa41242",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      secure: false,
+      maxAge: 86400000,
+    },
+  })
+);
+
 const client = new OAuth2Client({
   server: "https://api.spotify.com",
   authorizationEndpoint: process.env.SC_AUTHORIZATION_URL,
@@ -29,68 +44,84 @@ const client = new OAuth2Client({
   clientId: process.env.SC_CLIENT_ID,
   clientSecret: process.env.SC_CLIENT_SECRET,
   redirectUri: process.env.SC_REDIRECT_URI,
-  pkce: true, // turns on PKCE automatically
+  pkce: true,
 });
 
-const redirectUri = process.env.SC_REDIRECT_URI;
-
-app.use(session({
-  store: new FileStoreSession({
-    path: "./sessions",
-    ttl: 86000,
-  }),
-  secret: "meoasudhfa41242", //js something random
-  resave: false,
-  saveUninitialized: false,
-  cookie: { secure: false, maxAge: 86400000 }
-}));
-
-// Step 1: redirect user to Spotify login
+// ================= LOGIN =================
 app.get("/auth/login", async (req, res) => {
-  const codeVerifier = await generateCodeVerifier();
-  const uri = await client.authorizationCode.getAuthorizeUri({
-    redirectUri: process.env.SC_REDIRECT_URI,
-    codeVerifier,
-    scope: [
-      "playlist-read-private",
-      "playlist-read-collaborative",
-      "playlist-modify-public",
-      "playlist-modify-private",
-      "user-library-read",
-    ]
-  });
-  codeVerifierGlobal = codeVerifier;
-  console.log("url is " + uri);
-  res.redirect(uri);
+  try {
+    const codeVerifier = await generateCodeVerifier();
+
+    req.session.codeVerifier = codeVerifier;
+
+    const uri = await client.authorizationCode.getAuthorizeUri({
+      redirectUri: process.env.SC_REDIRECT_URI,
+      codeVerifier,
+      scope: [
+        "playlist-read-private",
+        "playlist-read-collaborative",
+        "playlist-modify-public",
+        "playlist-modify-private",
+        "user-library-read",
+      ],
+    });
+
+    console.log("url is " + uri);
+
+    req.session.save((err) => {
+      if (err) {
+        console.error("Session save error before login redirect:", err);
+        return res.status(500).json({ error: "Failed to start login" });
+      }
+
+      res.redirect(uri);
+    });
+  } catch (error) {
+    console.error("Login redirect error:", error.message);
+    res.status(500).json({ error: "Failed to start login" });
+  }
 });
 
-// Step 2: handle callback
+// ================= CALLBACK =================
 app.get("/auth/callback", async (req, res) => {
   const fullRedirectUrl = `${req.protocol}://${req.get("host")}${req.originalUrl}`;
+
   try {
-    //console.log("i got the code: ", code)
-    //console.log("full url: "+fullRedirectUrl)
+    if (!req.session.codeVerifier) {
+      return res.status(400).json({ error: "Missing code verifier" });
+    }
+
     const tokenSet = await client.authorizationCode.getTokenFromCodeRedirect(
       fullRedirectUrl,
       {
         redirectUri: process.env.SC_REDIRECT_URI,
-        codeVerifier: codeVerifierGlobal,
-      });
+        codeVerifier: req.session.codeVerifier,
+      }
+    );
+
     console.log("Access Token:", tokenSet);
 
-    // Store token in memory/session for simplicity
-    req.session.accessToken = tokenSet.accessToken
+    req.session.accessToken = tokenSet.accessToken;
+    req.session.codeVerifier = null;
 
-    res.redirect("http://127.0.0.1:5173");
+    req.session.save((err) => {
+      if (err) {
+        console.error("Session save error after callback:", err);
+        return res.status(500).json({ error: "Authentication failed" });
+      }
+
+      res.redirect("http://127.0.0.1:5173");
+    });
   } catch (error) {
-    console.error("Access Token Error", error.message);
-    res.status(500).json("Authentication failed");
+    console.error("Access Token Error:", error.message);
+    res.status(500).json({ error: "Authentication failed" });
   }
 });
 
-// ================= LOGIN CHECK ===============
+// ================= LOGIN CHECK =================
 app.get("/api/me", (req, res) => {
-  console.log("api.me is functioning")
+  console.log("api.me is functioning");
+
   if (!req.session.accessToken) {
     return res.status(401).json({ loggedIn: false });
   }
@@ -99,57 +130,84 @@ app.get("/api/me", (req, res) => {
 });
 
 // ================= SEARCH =================
-
 app.get("/api/search", async (req, res) => {
   const query = req.query.q;
   console.log("Search request:", query);
 
   const token = req.session.accessToken;
-  if (!token) return res.status(401).json({ error: "Not logged in" });
+  if (!token) {
+    return res.status(401).json({ error: "Not logged in" });
+  }
 
   try {
     const params = new URLSearchParams({
       q: query,
       type: "track",
-      limit: 10
+      limit: 10,
     });
 
     const response = await fetch(`https://api.spotify.com/v1/search?${params}`, {
-      headers: { "Authorization": `Bearer ${token}` }
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
     });
 
     const data = await response.json();
-    res.json(data.tracks.items);
 
+    if (!response.ok) {
+      return res.status(response.status).json(data);
+    }
+
+    res.json(data.tracks.items);
   } catch (err) {
     console.error("Spotify error:", err.message);
     res.status(500).json({ error: "Search failed" });
   }
 });
 
-// logout stuff
+// ================= LOGOUT =================
 app.post("/auth/logout", (req, res) => {
-  //this will destroy the session on the server, browser cookie becomes orphaned
-  req.session.destroy(err => {
-    if (err) return res.status(500).json({ error: "Logout failed" });
-    res.json({ success: true })
+  req.session.destroy((err) => {
+    if (err) {
+      return res.status(500).json({ error: "Logout failed" });
+    }
+
+    res.json({ success: true });
   });
 });
 
-// ================= PLAYLISTS STUFF =================
-
-//this retrieves all playlists belonging to the logged-in user
+// ================= PLAYLISTS =================
 app.get("/api/playlists", async (req, res) => {
   const token = req.session.accessToken;
-  const authHeader = `Bearer ${token}`;
-  console.log("AUTH HEADER:", JSON.stringify(authHeader));
-  if (!token) return res.status(401).json({ error: "Not logged in" });
+
+  if (!token) {
+    return res.status(401).json({ error: "Not logged in" });
+  }
 
   try {
     const response = await fetch("https://api.spotify.com/v1/me/playlists?limit=50", {
-      headers: { "Authorization": `Bearer ${token}` }
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
     });
-    const data = await response.json();
+
+    const text = await response.text();
+    console.log("Playlists raw response:", text);
+
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      return res.status(response.status).json({
+        error: "Spotify returned non-JSON",
+        details: text,
+      });
+    }
+
+    if (!response.ok) {
+      return res.status(response.status).json(data);
+    }
+
     res.json(data.items);
   } catch (err) {
     console.error("Playlists error:", err);
@@ -157,10 +215,13 @@ app.get("/api/playlists", async (req, res) => {
   }
 });
 
-//gets all the tracks inside a specific playlist by playlist id
+// ================= PLAYLIST TRACKS =================
 app.get("/api/playlists/:id/tracks", async (req, res) => {
   const token = req.session.accessToken;
-  if (!token) return res.status(401).json({ error: "Not logged in" });
+
+  if (!token) {
+    return res.status(401).json({ error: "Not logged in" });
+  }
 
   try {
     let tracks = [];
@@ -168,29 +229,36 @@ app.get("/api/playlists/:id/tracks", async (req, res) => {
 
     while (url) {
       const response = await fetch(url, {
-        headers: { "Authorization": `Bearer ${token}` }
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
       });
+
       const data = await response.json();
-      console.log("STATUS:", response.status, "HAS ITEMS:", !!data.items);
-      //tracks.push(...(data.items.map(item => item.item).filter(Boolean)))
-      const items = data.items.map(item => item.item).filter(Boolean);
-      console.log("FIRST ITEM:", JSON.stringify(items[0])?.slice(0, 100));
+
+      if (!response.ok) {
+        return res.status(response.status).json(data);
+      }
+
+      const items = data.items.map((item) => item.item).filter(Boolean);
       tracks = tracks.concat(items);
-      url = data.next; // null when we've hit the last page
+      url = data.next;
     }
 
-    console.log("length of tracks is ", tracks.length)
     res.json(tracks);
   } catch (err) {
-    console.error("Playlist tracks error:", err);
+    console.error("Playlist tracks error:", err.message);
     res.status(500).json({ error: "Failed to fetch playlist tracks" });
   }
 });
 
-// create a new empty playlist on the user's account
+// ================= CREATE PLAYLIST =================
 app.post("/api/playlists", async (req, res) => {
   const token = req.session.accessToken;
-  if (!token) return res.status(401).json({ error: "Not logged in" });
+
+  if (!token) {
+    return res.status(401).json({ error: "Not logged in" });
+  }
 
   const { name, description } = req.body;
 
@@ -198,12 +266,22 @@ app.post("/api/playlists", async (req, res) => {
     const response = await fetch("https://api.spotify.com/v1/me/playlists", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${token}`,
-        "Content-Type": "application/json"
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
       },
-      body: JSON.stringify({ name, description, public: false })
+      body: JSON.stringify({
+        name,
+        description,
+        public: false,
+      }),
     });
+
     const data = await response.json();
+
+    if (!response.ok) {
+      return res.status(response.status).json(data);
+    }
+
     res.json(data);
   } catch (err) {
     console.error("Create playlist error:", err.message);
@@ -211,41 +289,56 @@ app.post("/api/playlists", async (req, res) => {
   }
 });
 
-//replace the track order in a playlist (this is how we push a sorted order back to spotify)
+// ================= REPLACE PLAYLIST ITEMS =================
 app.put("/api/playlists/:id/items", async (req, res) => {
   const token = req.session.accessToken;
-  if (!token) return res.status(401).json({ error: "Not logged in" });
+
+  if (!token) {
+    return res.status(401).json({ error: "Not logged in" });
+  }
 
   const { uris } = req.body;
 
   try {
-    //Spotify caps both PUT and POST at 100 URIs per request
     const chunks = [];
     for (let i = 0; i < uris.length; i += 100) {
       chunks.push(uris.slice(i, i + 100));
     }
 
-    //PUT replaces the entire playlist — send the first 100
     const putRes = await fetch(`https://api.spotify.com/v1/playlists/${req.params.id}/items`, {
       method: "PUT",
-      headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ uris: chunks[0] })
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ uris: chunks[0] }),
     });
+
     if (!putRes.ok) {
       const err = await putRes.json();
-      return res.status(putRes.status).json({ error: err?.error?.message ?? "Spotify PUT failed" });
+      return res
+        .status(putRes.status)
+        .json({ error: err?.error?.message ?? "Spotify PUT failed" });
     }
 
-    //POST appends the rest, 100 at a time, at the correct position
     for (let i = 1; i < chunks.length; i++) {
       const postRes = await fetch(`https://api.spotify.com/v1/playlists/${req.params.id}/items`, {
         method: "POST",
-        headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ uris: chunks[i], position: i * 100 })
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          uris: chunks[i],
+          position: i * 100,
+        }),
       });
+
       if (!postRes.ok) {
         const err = await postRes.json();
-        return res.status(postRes.status).json({ error: err?.error?.message ?? `Spotify POST chunk ${i} failed` });
+        return res
+          .status(postRes.status)
+          .json({ error: err?.error?.message ?? `Spotify POST chunk ${i} failed` });
       }
     }
 
@@ -256,37 +349,39 @@ app.put("/api/playlists/:id/items", async (req, res) => {
   }
 });
 
-
-// add one or more tracks to a playlist
+// ================= ADD TRACKS TO PLAYLIST =================
 app.post("/api/playlists/:id/items", async (req, res) => {
-    const token = req.session.accessToken;
-    if (!token) return res.status(401).json({ error: "Not logged in" });
+  const token = req.session.accessToken;
 
-    const { uris } = req.body;
+  if (!token) {
+    return res.status(401).json({ error: "Not logged in" });
+  }
 
-    try {
-        const response = await fetch(`https://api.spotify.com/v1/playlists/${req.params.id}/items`, {
-            method: "POST",
-            headers: {
-                "Authorization": `Bearer ${token}`,
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({ uris })
-        });
-        const data = await response.json();
-        if (!response.ok) {
-            return res.status(response.status).json({ error: data?.error?.message ?? "Spotify rejected the request" });
-        }
-        res.json({ success: true });
-    } catch (err) {
-        console.error("Add tracks error:", err.message);
-        res.status(500).json({ error: "Failed to add tracks" });
+  const { uris } = req.body;
+
+  try {
+    const response = await fetch(`https://api.spotify.com/v1/playlists/${req.params.id}/tracks`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ uris }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      return res.status(response.status).json(data);
     }
+
+    res.json(data);
+  } catch (err) {
+    console.error("Add tracks error:", err.message);
+    res.status(500).json({ error: "Failed to add tracks" });
+  }
 });
 
-
-// ================= START =================
-
-app.listen(3001, "127.0.0.1", () => {
-  console.log("Backend running on port 3001");
+app.listen(PORT, () => {
+  console.log(`Backend running on port ${PORT}`);
 });
